@@ -565,7 +565,7 @@ async def alive_handler(client, message):
 # MAIN MESSAGE HANDLER
 # ============================================================
 
-@client.on_message(filters.incoming)
+@client.on_message(filters.all)
 async def message_handler(client, message):
 
     # Ignore service messages, empty messages and our own messages.
@@ -621,10 +621,18 @@ async def message_handler(client, message):
 
     # Old AlexaDb behaviour.
     if await is_chat_disabled(chat_id):
+        logger.info("Replies disabled for chat=%s", chat_id)
         return
 
     is_private = message.chat.type == ChatType.PRIVATE
     is_mention = contains_mention(message)
+
+    logger.info(
+        "Processing %s message | chat=%s | private=%s",
+        "private" if is_private else "group",
+        chat_id,
+        is_private,
+    )
 
     # --------------------------------------------------------
     # Determine whether this message should receive a reply.
