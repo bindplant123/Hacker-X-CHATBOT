@@ -22,6 +22,7 @@ except RuntimeError:
 from pyrogram import Client, filters
 from pyrogram.enums import ChatType
 from pyrogram.errors import FloodWait, RPCError
+from pyrogram.handlers import MessageHandler, RawUpdateHandler
 
 
 # ============================================================
@@ -571,7 +572,6 @@ async def alive_handler(client, message):
 # MAIN MESSAGE HANDLER
 # ============================================================
 
-@client.on_message()
 async def message_handler(client, message):
 
     logger.info(
@@ -727,6 +727,14 @@ async def message_handler(client, message):
         message.id,
         REPLY_DELAY,
     )
+
+
+async def raw_update_logger(client, update, users, chats):
+    logger.info("Telegram raw update received: %s", type(update).__name__)
+
+
+client.add_handler(MessageHandler(message_handler), group=0)
+client.add_handler(RawUpdateHandler(raw_update_logger), group=1)
 
 
 # ============================================================
