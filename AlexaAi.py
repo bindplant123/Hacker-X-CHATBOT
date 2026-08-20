@@ -909,7 +909,7 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        client.run(main())
 
     except KeyboardInterrupt:
         pass
