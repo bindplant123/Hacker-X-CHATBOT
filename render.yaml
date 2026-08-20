@@ -24,7 +24,7 @@ services:
         value: AlexaDb
 
       - key: REPLY_DELAY
-        value: "60"
+        value: "0"
 
       - key: REPLY_TO_NORMAL_MESSAGES
         value: "true"

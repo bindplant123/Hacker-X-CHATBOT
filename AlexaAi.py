@@ -39,7 +39,7 @@ SESSION_STRING = os.getenv("SESSION_STRING", "").strip()
 MONGO_URL = os.getenv("MONGO_URL", "").strip()
 DATABASE_NAME = os.getenv("DATABASE_NAME", "AlexaDb").strip()
 
-REPLY_DELAY = int(os.getenv("REPLY_DELAY", "60"))
+REPLY_DELAY = int(os.getenv("REPLY_DELAY", "0"))
 PORT = int(os.getenv("PORT", "10000"))
 
 # Maximum number of delayed jobs allowed in memory.
@@ -671,12 +671,13 @@ async def message_handler(client, message):
     if not response:
         return
 
-    if response.get("instant"):
+    if response.get("instant") or REPLY_DELAY == 0:
         await send_response(message, response)
         logger.info(
-            "Instant reply sent | chat=%s | message=%s",
+            "Reply sent | chat=%s | message=%s | mode=%s",
             chat_id,
             message.id,
+            "instant" if response.get("instant") else "immediate",
         )
         return
 
