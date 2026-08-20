@@ -55,6 +55,12 @@ REPLY_TO_NORMAL_MESSAGES = (
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
+DEFAULT_GREETING_RESPONSES = (
+    "Hello! Main online hoon.",
+    "Hi! Kaise help karun?",
+    "Hii! Bot active hai.",
+)
+
 
 # ============================================================
 # LOGGING
@@ -317,10 +323,16 @@ def get_response_candidates(trigger: str) -> list[dict]:
 def choose_response(trigger: str) -> Optional[dict]:
     candidates = get_response_candidates(trigger)
 
-    if not candidates:
-        return None
+    if candidates:
+        return random.choice(candidates)
 
-    return random.choice(candidates)
+    if re.fullmatch(r"(?:hi|hii+|hello|hey)[!.?, ]*", trigger.casefold()):
+        return {
+            "text": random.choice(DEFAULT_GREETING_RESPONSES),
+            "check": "none",
+        }
+
+    return None
 
 
 async def send_response(message, response: dict) -> None:
