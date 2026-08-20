@@ -102,13 +102,21 @@ validate_config()
 
 API_ID = int(API_ID_RAW)
 
+try:
+    telegram_session = StringSession(SESSION_STRING)
+except ValueError as exc:
+    raise RuntimeError(
+        "SESSION_STRING is invalid. Generate a Telethon StringSession and "
+        "paste the complete value into Render's SESSION_STRING environment variable."
+    ) from exc
+
 
 # ============================================================
 # TELEGRAM
 # ============================================================
 
 client = TelegramClient(
-    StringSession(SESSION_STRING),
+    telegram_session,
     API_ID,
     API_HASH,
     sequential_updates=False,
@@ -729,9 +737,9 @@ async def shutdown(health_runner=None):
 async def main():
     global me_id, me_username
 
-    setup_database()
-
     health_runner = await start_health_server()
+
+    setup_database()
 
     loop = asyncio.get_running_loop()
 

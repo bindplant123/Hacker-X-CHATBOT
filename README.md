@@ -30,7 +30,8 @@ Modern 2026 Telegram userbot/chatbot based on Telethon and MongoDB.
 1. Click the Render button above.
 2. Sign in to Render.
 3. Select the repository `bindplant123/Hacker-X-CHATBOT`.
-4. Add the required environment variables.
+4. Add the required environment variables. `SESSION_STRING` must be a complete
+    Telethon session string, not an API hash, phone number, or placeholder text.
 5. Deploy the service.
 
 Render automatically uses the included `render.yaml` configuration and exposes a health check at `/healthz`.
@@ -40,7 +41,7 @@ Render automatically uses the included `render.yaml` configuration and exposes a
 ```text
 API_ID=12345678
 API_HASH=your_api_hash_here
-SESSION_STRING=your_telegram_session_string
+SESSION_STRING=your_complete_telethon_string_session
 MONGO_URL=mongodb+srv://username:password@cluster.mongodb.net/yourdb
 DATABASE_NAME=AlexaDb
 REPLY_DELAY=60
@@ -57,16 +58,19 @@ PORT=10000
 2. Create an app to get:
    - `API_ID`
    - `API_HASH`
-3. Generate a Telethon session string using Python:
+3. Generate a Telethon session string using Python. Run this locally, complete
+   the Telegram login prompts, and copy the full printed value to Render's
+   `SESSION_STRING` variable:
 
 ```bash
-python -c "from telethon.sync import TelegramClient
-from telethon.sessions import StringSession
-with TelegramClient(StringSession(), 12345678, 'your_api_hash') as client:
-    print(client.session.save())"
+python -c "from telethon.sync import TelegramClient; from telethon.sessions import StringSession; client = TelegramClient(StringSession(), 12345678, 'your_api_hash'); client.start(); print(client.session.save()); client.disconnect()"
 ```
 
 Replace `12345678` and `your_api_hash` with your actual values.
+
+Do not include quotes, backticks, or the `SESSION_STRING=` prefix when pasting
+the generated value into Render. After saving the variable, manually trigger
+a new deploy so Render restarts the service with the updated secret.
 
 ## MongoDB Setup
 
