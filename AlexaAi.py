@@ -15,7 +15,7 @@ from pymongo.errors import PyMongoError
 
 # Pyrogram's compatibility layer expects a current event loop at import time.
 try:
-    asyncio.get_event_loop()
+    asyncio.get_running_loop()
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
@@ -571,13 +571,7 @@ async def alive_handler(client, message):
 # MAIN MESSAGE HANDLER
 # ============================================================
 
-message_filters = (
-    (filters.private | filters.group)
-    & (filters.text | filters.caption | filters.sticker)
-)
-
-
-@client.on_message(message_filters)
+@client.on_message()
 async def message_handler(client, message):
 
     logger.info(
@@ -588,6 +582,13 @@ async def message_handler(client, message):
 
     # Ignore service messages, empty messages and our own messages.
     if not message:
+        return
+
+    if message.chat.type not in {
+        ChatType.PRIVATE,
+        ChatType.GROUP,
+        ChatType.SUPERGROUP,
+    }:
         return
 
     if message.service:
