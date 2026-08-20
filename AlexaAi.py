@@ -612,9 +612,6 @@ async def message_handler(client, message):
     if message.service:
         return
 
-    if is_self_message(message):
-        return
-
     command = (message.text or "").strip().casefold()
 
     if command in {".ping", "/ping", "-ping", "?ping"}:
@@ -636,6 +633,14 @@ async def message_handler(client, message):
             )
         except RPCError:
             logger.exception("Failed to send ping response.")
+        return
+
+    if is_self_message(message):
+        logger.info(
+            "Ignoring self message | chat=%s | message=%s",
+            message.chat.id,
+            message.id,
+        )
         return
 
     if re.fullmatch(r"^[/.?\-]alive(?:\s+.*)?$", command):
