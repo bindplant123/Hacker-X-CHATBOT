@@ -355,6 +355,12 @@ async def resolve_audio_file(query: str, chat_id: int) -> str:
     return file_path
 
 
+async def ensure_voice_chat(chat_id: int) -> None:
+    chat_call = await voice_calls._app.get_full_chat(chat_id)
+    if chat_call is None:
+        await voice_calls._app.create_group_call(chat_id)
+
+
 async def send_music_status(message, text: str) -> None:
     try:
         await client.send_message(
@@ -379,8 +385,12 @@ async def music_command(message, command: str) -> bool:
                 await send_music_status(message, "Use: .play song name or YouTube URL")
                 return True
 
-            await send_music_status(message, "Searching and joining the voice chat...")
-            audio_file = await resolve_audio_file(parts[1], chat_id)
+            await ensure_voice_chat(chat_id)
+            await send_music_status(message, "Voice chat started. Searching for the song...")
+            audio_file = await asyncio.wait_for(
+                resolve_audio_file(parts[1], chat_id),
+                timeout=90,
+            )
             await voice_calls.play(chat_id, audio_file)
             await send_music_status(message, "Playing now in the voice chat.")
         elif base_command in PAUSE_COMMANDS:
