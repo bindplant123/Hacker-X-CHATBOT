@@ -61,6 +61,12 @@ DEFAULT_GREETING_RESPONSES = (
     "Hii! Bot active hai.",
 )
 
+DEFAULT_CHAT_RESPONSES = (
+    "Ji, main online hoon. Bataiye.",
+    "Message mila. Kaise help karun?",
+    "Haan ji, boliye.",
+)
+
 
 # ============================================================
 # LOGGING
@@ -683,7 +689,19 @@ async def message_handler(client, message):
 
     response = choose_response(trigger)
 
+    if not response and (is_private or is_mention):
+        response = {
+            "text": random.choice(DEFAULT_CHAT_RESPONSES),
+            "check": "none",
+            "instant": True,
+        }
+
     if not response:
+        logger.info(
+            "No response configured | chat=%s | trigger=%s",
+            chat_id,
+            trigger,
+        )
         return
 
     if response.get("instant") or REPLY_DELAY == 0:
