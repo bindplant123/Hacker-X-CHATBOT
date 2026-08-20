@@ -333,11 +333,39 @@ async def resolve_audio_file(query: str, chat_id: int) -> str:
         if not match:
             raise RuntimeError("Arc API returned an invalid Telegram CDN URL.")
         media_message = await client.get_messages(match.group(1), int(match.group(2)))
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as audio_file:
-            file_path = audio_file.name
-        downloaded_path = await media_message.download(file_name=file_path)
-        if downloaded_path:
-            file_path = downloaded_path
+        file_path = None
+        last_error = None
+        for attempt in range(1, 4):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as audio_file:
+                candidate_path = audio_file.name
+            try:
+                downloaded_path = await asyncio.wait_for(
+                    media_message.download(file_name=candidate_path),
+                    timeout=45,
+                )
+                if downloaded_path:
+                    file_path = downloaded_path
+                    break
+                last_error = RuntimeError("Telegram returned no downloaded file.")
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Telegram CDN download attempt %s/3 failed: %s",
+                    attempt,
+                    exc,
+                )
+            finally:
+                if file_path != candidate_path:
+                    with suppress(OSError):
+                        os.remove(candidate_path)
+            if attempt < 3:
+                await asyncio.sleep(2)
+
+        if not file_path:
+            raise RuntimeError(
+                "Telegram media CDN timed out after 3 attempts. "
+                "Try .play again in a few seconds."
+            ) from last_error
     else:
         async with arc_session.get(cdn_url, timeout=None) as response:
             if response.status != 200:
@@ -1074,7 +1102,7 @@ async def main():
     await client.start()
 
     voice_calls = PyTgCalls(client)
-    voice_calls.start()
+    await voice_calls.start()
     logger.info("Voice chat player started.")
 
     me = await client.get_me()
