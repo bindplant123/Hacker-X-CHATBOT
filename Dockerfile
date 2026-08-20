@@ -7,10 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Only install what the application actually needs.
+# FFmpeg is required by the voice-chat music player.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

@@ -22,6 +22,7 @@ Modern 2026 Telegram userbot/chatbot based on Pyrogram and MongoDB.
 - Docker deployment
 - Health endpoint
 - Graceful shutdown
+- Voice-chat music playback with `.play`, `.pause`, `.resume`, `.skip`, and `.stop`
 - Environment-based secrets
 - No hard-coded credentials
 
@@ -51,6 +52,12 @@ LOG_LEVEL=INFO
 APP_NAME=VIP-ID-CHATBOT
 PORT=10000
 ```
+
+## Voice-Chat Music
+
+Add the user account to a Telegram group voice chat, then send `.play song name`
+or `.play YouTube URL`. The player uses the same `SESSION_STRING`, PyTgCalls,
+yt-dlp, and FFmpeg. Use `.pause`, `.resume`, `.skip`, or `.stop` to control it.
 
 ## How to Get Telegram Credentials
 

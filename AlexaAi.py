@@ -23,6 +23,7 @@ from pyrogram import Client, filters, idle
 from pyrogram.enums import ChatType
 from pyrogram.errors import FloodWait, RPCError
 from pyrogram.handlers import MessageHandler, RawUpdateHandler
+from pytgcalls import PyTgCalls
 
 
 # ============================================================
@@ -67,6 +68,12 @@ DEFAULT_CHAT_RESPONSES = (
     "Message mila. Kaise help karun?",
     "Haan ji, boliye.",
 )
+
+MUSIC_COMMANDS = {".play", "/play", "!play", ".p", "/p", "!p"}
+PAUSE_COMMANDS = {".pause", "/pause", "!pause"}
+RESUME_COMMANDS = {".resume", "/resume", "!resume"}
+SKIP_COMMANDS = {".skip", "/skip", "!skip"}
+STOP_COMMANDS = {".stop", "/stop", "!stop", ".leave", "/leave", "!leave"}
 
 
 # ============================================================
@@ -200,6 +207,7 @@ me_username: Optional[str] = None
 
 pending_jobs: set[asyncio.Task] = set()
 processed_messages: set[tuple[int, int]] = set()
+voice_calls: Optional[PyTgCalls] = None
 
 
 # ============================================================
@@ -241,6 +249,72 @@ def user_label(user) -> str:
 def message_preview(message) -> str:
     content = message.text or message.caption or "[sticker/media]"
     return content.replace("\n", " ")[:200]
+
+
+async def resolve_audio_url(query: str) -> str:
+    target = query if re.match(r"^https?://", query) else f"ytsearch1:{query}"
+    process = await asyncio.create_subprocess_exec(
+        "yt-dlp", "--no-playlist", "--no-warnings", "-f", "bestaudio/best",
+        "-g", target, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+
+    if process.returncode != 0:
+        detail = stderr.decode(errors="replace").strip()[-300:]
+        raise RuntimeError(detail or "Audio search failed.")
+
+    stream_urls = stdout.decode(errors="replace").strip().splitlines()
+    if not stream_urls:
+        raise RuntimeError("No audio result found.")
+
+    return stream_urls[0]
+
+
+async def send_music_status(message, text: str) -> None:
+    try:
+        await client.send_message(
+            message.chat.id, text, reply_to_message_id=message.id
+        )
+    except RPCError:
+        logger.exception("Failed sending music status.")
+
+
+async def music_command(message, command: str) -> bool:
+    if voice_calls is None:
+        await send_music_status(message, "Music player is not available.")
+        return True
+
+    parts = command.split(maxsplit=1)
+    base_command = parts[0]
+    chat_id = int(message.chat.id)
+
+    try:
+        if base_command in MUSIC_COMMANDS:
+            if len(parts) == 1:
+                await send_music_status(message, "Use: .play song name or YouTube URL")
+                return True
+
+            await send_music_status(message, "Searching and joining the voice chat...")
+            stream_url = await resolve_audio_url(parts[1])
+            await voice_calls.play(chat_id, stream_url)
+            await send_music_status(message, "Playing now in the voice chat.")
+        elif base_command in PAUSE_COMMANDS:
+            await voice_calls.pause(chat_id)
+            await send_music_status(message, "Paused.")
+        elif base_command in RESUME_COMMANDS:
+            await voice_calls.resume(chat_id)
+            await send_music_status(message, "Resumed.")
+        elif base_command in SKIP_COMMANDS | STOP_COMMANDS:
+            await voice_calls.leave_call(chat_id)
+            await send_music_status(message, "Stopped and left the voice chat.")
+        else:
+            return False
+    except Exception as exc:
+        logger.exception("Music command failed: %s", base_command)
+        await send_music_status(message, f"Music error: {str(exc)[:250]}")
+
+    return True
 
 
 async def is_chat_disabled(chat_id: int) -> bool:
@@ -614,6 +688,16 @@ async def message_handler(client, message):
 
     command = (message.text or "").strip().casefold()
 
+    if command and command.split(maxsplit=1)[0] in (
+        MUSIC_COMMANDS
+        | PAUSE_COMMANDS
+        | RESUME_COMMANDS
+        | SKIP_COMMANDS
+        | STOP_COMMANDS
+    ):
+        await music_command(message, command)
+        return
+
     if command in {".ping", "/ping", "-ping", "?ping"}:
         logger.info(
             "Ping command received | from=%s | chat=%s",
@@ -808,6 +892,7 @@ async def health_handler(request):
             "service": APP_NAME,
             "telegram_connected": client.is_connected,
             "pending_jobs": len(pending_jobs),
+            "voice_chat_enabled": voice_calls is not None,
         }
     )
 
@@ -839,6 +924,8 @@ async def start_health_server():
 # ============================================================
 
 async def shutdown(health_runner=None):
+    global voice_calls
+
     logger.info("Shutdown requested.")
 
     for task in list(pending_jobs):
@@ -851,6 +938,8 @@ async def shutdown(health_runner=None):
         )
 
     pending_jobs.clear()
+
+    voice_calls = None
 
     if health_runner:
         with suppress(Exception):
@@ -870,7 +959,7 @@ async def shutdown(health_runner=None):
 # ============================================================
 
 async def main():
-    global me_id, me_username
+    global me_id, me_username, voice_calls
 
     health_runner = await start_health_server()
 
@@ -879,6 +968,10 @@ async def main():
     logger.info("Starting Telegram client...")
 
     await client.start()
+
+    voice_calls = PyTgCalls(client)
+    voice_calls.start()
+    logger.info("Voice chat player started.")
 
     me = await client.get_me()
 
