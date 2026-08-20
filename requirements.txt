@@ -1,5 +1,5 @@
-Telethon==1.44.0
+Pyrogram==2.0.106
 PyMongo==4.17.0
 aiohttp==3.14.3
 python-dotenv==1.2.2
-cryptg==0.6.0
+TgCrypto==1.2.5

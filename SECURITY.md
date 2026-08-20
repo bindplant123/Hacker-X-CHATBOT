@@ -46,7 +46,7 @@ Do not log:
 
 ## Session Security
 
-The Telethon StringSession is effectively a login credential.
+The Pyrogram SESSION_STRING is effectively a login credential.
 
 Treat SESSION_STRING like a password.
 

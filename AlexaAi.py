@@ -12,9 +12,16 @@ from dotenv import load_dotenv
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
 from pymongo.errors import PyMongoError
-from telethon import TelegramClient, events
-from telethon.errors import FloodWaitError, RPCError
-from telethon.sessions import StringSession
+
+# Pyrogram's compatibility layer expects a current event loop at import time.
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+from pyrogram import Client, filters
+from pyrogram.enums import ChatType
+from pyrogram.errors import FloodWait, RPCError
 
 
 # ============================================================
@@ -102,24 +109,15 @@ validate_config()
 
 API_ID = int(API_ID_RAW)
 
-try:
-    telegram_session = StringSession(SESSION_STRING)
-except ValueError as exc:
-    raise RuntimeError(
-        "SESSION_STRING is invalid. Generate a Telethon StringSession and "
-        "paste the complete value into Render's SESSION_STRING environment variable."
-    ) from exc
-
-
 # ============================================================
-# TELEGRAM
+# PYROGRAM
 # ============================================================
 
-client = TelegramClient(
-    telegram_session,
-    API_ID,
-    API_HASH,
-    sequential_updates=False,
+client = Client(
+    name="vip_id_chatbot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING,
 )
 
 
@@ -206,11 +204,11 @@ def normalize_text(value: Optional[str]) -> str:
 
 
 def get_message_key(message) -> tuple[int, int]:
-    return (int(message.chat_id), int(message.id))
+    return (int(message.chat.id), int(message.id))
 
 
 def is_self_message(message) -> bool:
-    return bool(message.out or message.sender_id == me_id)
+    return bool(message.outgoing or message.from_user and message.from_user.id == me_id)
 
 
 async def is_chat_disabled(chat_id: int) -> bool:
@@ -246,7 +244,7 @@ def get_trigger_key(message) -> Optional[str]:
     if message.sticker:
         return message.sticker.file_unique_id
 
-    text = normalize_text(message.raw_text)
+    text = normalize_text(message.text or message.caption)
 
     return text or None
 
@@ -262,12 +260,6 @@ def get_reply_trigger_key(message) -> Optional[str]:
     that message as a learning trigger.
     """
 
-    reply = message.reply_to_msg_id
-
-    if not reply:
-        return None
-
-    # The actual replied message is fetched by Telethon when required.
     return None
 
 
@@ -278,10 +270,12 @@ def contains_mention(message) -> bool:
     Also supports Telegram's entity-based mention.
     """
 
-    if not message.raw_text:
+    text = message.text or message.caption
+
+    if not text:
         return False
 
-    text = message.raw_text.lower()
+    text = text.lower()
 
     if me_username:
         username = me_username.lower().lstrip("@")
@@ -338,38 +332,38 @@ async def send_response(message, response: dict) -> None:
 
     try:
         if response_type == "sticker":
-            await client.send_file(
-                message.chat_id,
+            await client.send_sticker(
+                message.chat.id,
                 response_text,
-                reply_to=message.id,
+                reply_to_message_id=message.id,
             )
         else:
             await client.send_message(
-                message.chat_id,
+                message.chat.id,
                 str(response_text),
-                reply_to=message.id,
+                reply_to_message_id=message.id,
             )
 
-    except FloodWaitError as exc:
+    except FloodWait as exc:
         logger.warning(
             "Telegram FloodWait: sleeping %s seconds.",
-            exc.seconds,
+            exc.value,
         )
 
-        await asyncio.sleep(exc.seconds)
+        await asyncio.sleep(exc.value)
 
         try:
             if response_type == "sticker":
-                await client.send_file(
-                    message.chat_id,
+                await client.send_sticker(
+                    message.chat.id,
                     response_text,
-                    reply_to=message.id,
+                    reply_to_message_id=message.id,
                 )
             else:
                 await client.send_message(
-                    message.chat_id,
+                    message.chat.id,
                     str(response_text),
-                    reply_to=message.id,
+                    reply_to_message_id=message.id,
                 )
 
         except RPCError:
@@ -394,13 +388,13 @@ async def delayed_reply(message, response: dict) -> None:
         await asyncio.sleep(REPLY_DELAY)
 
         # Don't send if the process is shutting down.
-        if client.is_connected():
+        if client.is_connected:
             await send_response(message, response)
 
     except asyncio.CancelledError:
         logger.debug(
             "Delayed reply cancelled for chat=%s message=%s",
-            message.chat_id,
+            message.chat.id,
             message.id,
         )
         raise
@@ -414,7 +408,7 @@ def schedule_reply(message, response: dict) -> None:
         logger.warning(
             "Pending reply limit reached; dropping delayed reply "
             "for chat=%s message=%s",
-            message.chat_id,
+            message.chat.id,
             message.id,
         )
         return
@@ -503,17 +497,17 @@ async def learn_reply_to_other_user(message) -> None:
     This does NOT create a reply to the user immediately.
     """
 
-    if not message.is_reply:
+    if not message.reply_to_message_id:
         return
 
     try:
-        replied = await message.get_reply_message()
+        replied = message.reply_to_message
 
         if not replied:
             return
 
         # Don't learn from our own messages.
-        if replied.sender_id == me_id:
+        if replied.from_user and replied.from_user.id == me_id:
             return
 
         trigger = get_trigger_key(replied)
@@ -525,7 +519,7 @@ async def learn_reply_to_other_user(message) -> None:
             learn_sticker(trigger, message.sticker.file_id)
             return
 
-        text = normalize_text(message.raw_text)
+        text = normalize_text(message.text or message.caption)
 
         if text:
             learn_text(trigger, text)
@@ -538,14 +532,16 @@ async def learn_reply_to_other_user(message) -> None:
 # ALIVE
 # ============================================================
 
-@client.on(events.NewMessage(pattern=r"^[/.?\-]alive(?:\s+.*)?$"))
-async def alive_handler(event):
-    if event.is_private:
+@client.on_message(filters.regex(r"^[/.?\-]alive(?:\s+.*)?$"))
+async def alive_handler(client, message):
+    if message.chat.type == ChatType.PRIVATE:
         return
 
     try:
-        await event.reply(
-            "**ᴀʟᴇxᴀ ᴀɪ ᴜsᴇʀʙᴏᴛ ғᴏʀ ᴄʜᴀᴛᴛɪɴɢ ɪs ᴡᴏʀᴋɪɴɢ**"
+        await client.send_message(
+            message.chat.id,
+            "**ᴀʟᴇxᴀ ᴀɪ ᴜsᴇʀʙᴏᴛ ғᴏʀ ᴄʜᴀᴛᴛɪɴɢ ɪs ᴡᴏʀᴋɪɴɢ**",
+            reply_to_message_id=message.id,
         )
 
     except RPCError:
@@ -556,15 +552,14 @@ async def alive_handler(event):
 # MAIN MESSAGE HANDLER
 # ============================================================
 
-@client.on(events.NewMessage(incoming=True))
-async def message_handler(event):
-    message = event.message
+@client.on_message(filters.incoming)
+async def message_handler(client, message):
 
     # Ignore service messages, empty messages and our own messages.
     if not message:
         return
 
-    if message.action:
+    if message.service:
         return
 
     if is_self_message(message):
@@ -572,9 +567,9 @@ async def message_handler(event):
 
     # Ignore other bots.
     try:
-        sender = await message.get_sender()
+        sender = message.from_user
 
-        if sender and getattr(sender, "bot", False):
+        if sender and sender.is_bot:
             return
 
     except Exception:
@@ -594,7 +589,7 @@ async def message_handler(event):
         processed_messages.clear()
 
     # Learn relationships first.
-    if message.is_reply:
+    if message.reply_to_message_id:
         await learn_reply_to_other_user(message)
 
     trigger = get_trigger_key(message)
@@ -602,13 +597,13 @@ async def message_handler(event):
     if not trigger:
         return
 
-    chat_id = int(message.chat_id)
+    chat_id = int(message.chat.id)
 
     # Old AlexaDb behaviour.
     if await is_chat_disabled(chat_id):
         return
 
-    is_private = bool(event.is_private)
+    is_private = message.chat.type == ChatType.PRIVATE
     is_mention = contains_mention(message)
 
     # --------------------------------------------------------
@@ -620,11 +615,11 @@ async def message_handler(event):
     if is_private:
         should_reply = True
 
-    elif message.is_reply:
+    elif message.reply_to_message_id:
         try:
-            replied = await message.get_reply_message()
+            replied = message.reply_to_message
 
-            if replied and replied.sender_id == me_id:
+            if replied and replied.from_user and replied.from_user.id == me_id:
                 should_reply = True
 
         except Exception:
@@ -671,7 +666,7 @@ async def health_handler(request):
         {
             "status": "ok",
             "service": APP_NAME,
-            "telegram_connected": client.is_connected(),
+            "telegram_connected": client.is_connected,
             "pending_jobs": len(pending_jobs),
         }
     )
@@ -724,8 +719,8 @@ async def shutdown(health_runner=None):
     with suppress(Exception):
         mongo_client.close()
 
-    with suppress(Exception):
-        await client.disconnect()
+        with suppress(Exception):
+            await client.stop()
 
     logger.info("Shutdown complete.")
 

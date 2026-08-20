@@ -2,7 +2,7 @@
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/bindplant123/Hacker-X-CHATBOT)
 
-Modern 2026 Telegram userbot/chatbot based on Telethon and MongoDB.
+Modern 2026 Telegram userbot/chatbot based on Pyrogram and MongoDB.
 
 ## Features
 
@@ -31,7 +31,7 @@ Modern 2026 Telegram userbot/chatbot based on Telethon and MongoDB.
 2. Sign in to Render.
 3. Select the repository `bindplant123/Hacker-X-CHATBOT`.
 4. Add the required environment variables. `SESSION_STRING` must be a complete
-    Telethon session string, not an API hash, phone number, or placeholder text.
+   Pyrogram session string, not an API hash, phone number, or placeholder text.
 5. Deploy the service.
 
 Render automatically uses the included `render.yaml` configuration and exposes a health check at `/healthz`.
@@ -41,7 +41,7 @@ Render automatically uses the included `render.yaml` configuration and exposes a
 ```text
 API_ID=12345678
 API_HASH=your_api_hash_here
-SESSION_STRING=your_complete_telethon_string_session
+SESSION_STRING=your_complete_pyrogram_string_session
 MONGO_URL=mongodb+srv://username:password@cluster.mongodb.net/yourdb
 DATABASE_NAME=AlexaDb
 REPLY_DELAY=60
@@ -58,12 +58,12 @@ PORT=10000
 2. Create an app to get:
    - `API_ID`
    - `API_HASH`
-3. Generate a Telethon session string using Python. Run this locally, complete
+3. Generate a Pyrogram session string using Python. Run this locally, complete
    the Telegram login prompts, and copy the full printed value to Render's
    `SESSION_STRING` variable:
 
 ```bash
-python -c "from telethon.sync import TelegramClient; from telethon.sessions import StringSession; client = TelegramClient(StringSession(), 12345678, 'your_api_hash'); client.start(); print(client.session.save()); client.disconnect()"
+python -c "from pyrogram import Client; client = Client('session_generator', api_id=12345678, api_hash='your_api_hash'); client.start(); print(client.export_session_string()); client.stop()"
 ```
 
 Replace `12345678` and `your_api_hash` with your actual values.
