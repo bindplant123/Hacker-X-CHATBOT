@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: vip-id-chatbot
+    runtime: docker
+
+    healthCheckPath: /healthz
+
+    envVars:
+      - key: API_ID
+        sync: false
+
+      - key: API_HASH
+        sync: false
+
+      - key: SESSION_STRING
+        sync: false
+
+      - key: MONGO_URL
+        sync: false
+
+      - key: DATABASE_NAME
+        value: AlexaDb
+
+      - key: REPLY_DELAY
+        value: "60"
+
+      - key: REPLY_TO_NORMAL_MESSAGES
+        value: "true"
+
+      - key: MAX_PENDING_JOBS
+        value: "1000"
+
+      - key: LOG_LEVEL
+        value: INFO
+
+      - key: APP_NAME
+        value: VIP-ID-CHATBOT
