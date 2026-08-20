@@ -333,7 +333,11 @@ async def resolve_audio_file(query: str, chat_id: int) -> str:
         if not match:
             raise RuntimeError("Arc API returned an invalid Telegram CDN URL.")
         media_message = await client.get_messages(match.group(1), int(match.group(2)))
-        file_path = await media_message.download(file_name=tempfile.gettempdir())
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as audio_file:
+            file_path = audio_file.name
+        downloaded_path = await media_message.download(file_name=file_path)
+        if downloaded_path:
+            file_path = downloaded_path
     else:
         async with arc_session.get(cdn_url, timeout=None) as response:
             if response.status != 200:
