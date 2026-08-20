@@ -826,9 +826,11 @@ async def main():
     me_username = me.username
 
     logger.info(
-        "Logged in as id=%s username=%s",
+        "Logged in as id=%s username=%s is_bot=%s connected=%s",
         me_id,
         me_username or "none",
+        me.is_bot,
+        client.is_connected,
     )
 
     logger.info(
@@ -838,6 +840,7 @@ async def main():
     )
 
     try:
+        logger.info("Telegram dispatcher idle; waiting for messages.")
         await idle()
 
     finally:
