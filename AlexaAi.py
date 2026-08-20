@@ -19,7 +19,7 @@ try:
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.enums import ChatType
 from pyrogram.errors import FloodWait, RPCError
 from pyrogram.handlers import MessageHandler, RawUpdateHandler
@@ -816,18 +816,6 @@ async def main():
 
     setup_database()
 
-    loop = asyncio.get_running_loop()
-
-    stop_event = asyncio.Event()
-
-    def request_shutdown():
-        if not stop_event.is_set():
-            stop_event.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        with suppress(NotImplementedError):
-            loop.add_signal_handler(sig, request_shutdown)
-
     logger.info("Starting Telegram client...")
 
     await client.start()
@@ -850,7 +838,7 @@ async def main():
     )
 
     try:
-        await stop_event.wait()
+        await idle()
 
     finally:
         await shutdown(health_runner)
