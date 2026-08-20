@@ -4,9 +4,11 @@ import os
 import random
 import re
 import signal
+import tempfile
 from contextlib import suppress
 from typing import Optional
 
+import aiohttp
 from aiohttp import web
 from dotenv import load_dotenv
 from pymongo import ASCENDING, MongoClient
@@ -23,6 +25,7 @@ from pyrogram import Client, errors as pyrogram_errors, filters, idle
 from pyrogram.enums import ChatType
 from pyrogram.errors import FloodWait, RPCError
 from pyrogram.handlers import MessageHandler, RawUpdateHandler
+from py_yt import VideosSearch
 
 if not hasattr(pyrogram_errors, "GroupcallForbidden"):
     pyrogram_errors.GroupcallForbidden = pyrogram_errors.GroupCallInvalid
@@ -47,6 +50,8 @@ DATABASE_NAME = os.getenv("DATABASE_NAME", "AlexaDb").strip()
 
 REPLY_DELAY = int(os.getenv("REPLY_DELAY", "0"))
 PORT = int(os.getenv("PORT", "10000"))
+ARC_API_URL = os.getenv("ARC_API_URL", "https://api.arcmusic.fun").rstrip("/")
+ARC_API_KEY = os.getenv("ARC_API_KEY", "").strip()
 
 # Maximum number of delayed jobs allowed in memory.
 # MongoDB remains the source of truth for learned data.
@@ -212,6 +217,8 @@ me_username: Optional[str] = None
 pending_jobs: set[asyncio.Task] = set()
 processed_messages: set[tuple[int, int]] = set()
 voice_calls: Optional[PyTgCalls] = None
+arc_session: Optional[aiohttp.ClientSession] = None
+arc_files: dict[int, str] = {}
 
 
 # ============================================================
@@ -255,24 +262,93 @@ def message_preview(message) -> str:
     return content.replace("\n", " ")[:200]
 
 
-async def resolve_audio_url(query: str) -> str:
-    target = query if re.match(r"^https?://", query) else f"ytsearch1:{query}"
-    process = await asyncio.create_subprocess_exec(
-        "yt-dlp", "--no-playlist", "--no-warnings", "-f", "bestaudio/best",
-        "-g", target, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+def youtube_video_id(value: str) -> Optional[str]:
+    match = re.search(
+        r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]{11})",
+        value,
     )
-    stdout, stderr = await process.communicate()
+    return match.group(1) if match else None
 
-    if process.returncode != 0:
-        detail = stderr.decode(errors="replace").strip()[-300:]
-        raise RuntimeError(detail or "Audio search failed.")
 
-    stream_urls = stdout.decode(errors="replace").strip().splitlines()
-    if not stream_urls:
-        raise RuntimeError("No audio result found.")
+async def find_video_id(query: str) -> str:
+    direct_id = youtube_video_id(query)
+    if direct_id:
+        return direct_id
 
-    return stream_urls[0]
+    search = VideosSearch(query, limit=1, with_live=False, max_retries=3)
+    result = await search.next()
+    videos = result.get("result", []) if result else []
+    video_id = videos[0].get("id") if videos else None
+    if not video_id:
+        raise RuntimeError("No YouTube result found.")
+    return video_id
+
+
+async def resolve_audio_file(query: str, chat_id: int) -> str:
+    global arc_session
+
+    if not ARC_API_KEY:
+        raise RuntimeError("ARC_API_KEY is not configured in Render environment.")
+
+    if arc_session is None or arc_session.closed:
+        arc_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=60)
+        )
+
+    video_id = await find_video_id(query)
+    params = {
+        "api_key": ARC_API_KEY,
+        "query": video_id,
+        "isVideo": "false",
+    }
+
+    async with arc_session.get(
+        f"{ARC_API_URL}/youtube/v2/download", params=params
+    ) as response:
+        data = await response.json(content_type=None)
+
+    if response.status != 200 or data.get("status") not in {"success", "queued"}:
+        raise RuntimeError(data.get("message", "Arc API download failed."))
+
+    cdn_url = data.get("result", {}).get("cdn")
+    job_id = data.get("job_id")
+
+    if not cdn_url and job_id:
+        for _ in range(20):
+            await asyncio.sleep(3)
+            async with arc_session.get(
+                f"{ARC_API_URL}/youtube/jobStatus", params={"job_id": job_id}
+            ) as response:
+                status_data = await response.json(content_type=None)
+            job = status_data.get("job", {})
+            if status_data.get("status") == "success" and job.get("status") == "done":
+                cdn_url = job.get("result", {}).get("cdn")
+                break
+
+    if not cdn_url:
+        raise RuntimeError("Arc API did not return an audio file.")
+
+    if re.match(r"https?://(?:www\.)?t\.me/", cdn_url):
+        match = re.search(r"t\.me/(?:c/)?([\w_]+)/([0-9]+)", cdn_url)
+        if not match:
+            raise RuntimeError("Arc API returned an invalid Telegram CDN URL.")
+        media_message = await client.get_messages(match.group(1), int(match.group(2)))
+        file_path = await media_message.download(file_name=tempfile.gettempdir())
+    else:
+        async with arc_session.get(cdn_url, timeout=None) as response:
+            if response.status != 200:
+                raise RuntimeError("Could not download audio from Arc CDN.")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as audio_file:
+                async for chunk in response.content.iter_chunked(1024 * 1024):
+                    audio_file.write(chunk)
+                file_path = audio_file.name
+
+    previous_file = arc_files.get(chat_id)
+    if previous_file:
+        with suppress(OSError):
+            os.remove(previous_file)
+    arc_files[chat_id] = file_path
+    return file_path
 
 
 async def send_music_status(message, text: str) -> None:
@@ -300,8 +376,8 @@ async def music_command(message, command: str) -> bool:
                 return True
 
             await send_music_status(message, "Searching and joining the voice chat...")
-            stream_url = await resolve_audio_url(parts[1])
-            await voice_calls.play(chat_id, stream_url)
+            audio_file = await resolve_audio_file(parts[1], chat_id)
+            await voice_calls.play(chat_id, audio_file)
             await send_music_status(message, "Playing now in the voice chat.")
         elif base_command in PAUSE_COMMANDS:
             await voice_calls.pause(chat_id)
@@ -928,7 +1004,7 @@ async def start_health_server():
 # ============================================================
 
 async def shutdown(health_runner=None):
-    global voice_calls
+    global arc_session, voice_calls
 
     logger.info("Shutdown requested.")
 
@@ -944,6 +1020,16 @@ async def shutdown(health_runner=None):
     pending_jobs.clear()
 
     voice_calls = None
+
+    if arc_session:
+        with suppress(Exception):
+            await arc_session.close()
+        arc_session = None
+
+    for file_path in arc_files.values():
+        with suppress(OSError):
+            os.remove(file_path)
+    arc_files.clear()
 
     if health_runner:
         with suppress(Exception):

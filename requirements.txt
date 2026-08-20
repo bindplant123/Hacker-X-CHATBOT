@@ -3,4 +3,4 @@ PyMongo==4.17.0
 aiohttp==3.14.3
 python-dotenv==1.2.2
 py-tgcalls==2.2.11
-yt-dlp>=2024.1.1
+py-yt-search==0.7.3

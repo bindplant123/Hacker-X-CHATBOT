@@ -20,6 +20,9 @@ services:
       - key: MONGO_URL
         sync: false
 
+      - key: ARC_API_KEY
+        sync: false
+
       - key: DATABASE_NAME
         value: AlexaDb
 

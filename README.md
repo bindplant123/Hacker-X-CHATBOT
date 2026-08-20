@@ -23,6 +23,7 @@ Modern 2026 Telegram userbot/chatbot based on Pyrogram and MongoDB.
 - Health endpoint
 - Graceful shutdown
 - Voice-chat music playback with `.play`, `.pause`, `.resume`, `.skip`, and `.stop`
+- Cookie-free YouTube audio downloads through Arc API
 - Environment-based secrets
 - No hard-coded credentials
 
@@ -51,13 +52,17 @@ MAX_PENDING_JOBS=1000
 LOG_LEVEL=INFO
 APP_NAME=VIP-ID-CHATBOT
 PORT=10000
+ARC_API_URL=https://api.arcmusic.fun
+ARC_API_KEY=your_arc_api_key_here
 ```
 
 ## Voice-Chat Music
 
 Add the user account to a Telegram group voice chat, then send `.play song name`
-or `.play YouTube URL`. The player uses the same `SESSION_STRING`, PyTgCalls,
-yt-dlp, and FFmpeg. Use `.pause`, `.resume`, `.skip`, or `.stop` to control it.
+or `.play YouTube URL`. The player searches YouTube and downloads audio through
+Arc API, so YouTube browser cookies are not required. Create an API key at
+`portal.arcmusic.fun`, add it as `ARC_API_KEY` in Render, and use PyTgCalls and
+FFmpeg for playback. Use `.pause`, `.resume`, `.skip`, or `.stop` to control it.
 
 ## How to Get Telegram Credentials
 
