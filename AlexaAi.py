@@ -389,6 +389,30 @@ async def ensure_voice_chat(chat_id: int) -> None:
         await voice_calls._app.create_group_call(chat_id)
 
 
+async def ensure_voice_player() -> None:
+    if voice_calls is None:
+        raise RuntimeError("Music player is not available.")
+
+    if not getattr(voice_calls, "_is_running", False):
+        logger.info("Voice player is stopped; starting it before playback.")
+        await voice_calls.start()
+
+    if not getattr(voice_calls, "_is_running", False):
+        raise RuntimeError("Voice player could not be started.")
+
+
+async def play_audio(chat_id: int, audio_file: str) -> None:
+    await ensure_voice_player()
+    try:
+        await voice_calls.play(chat_id, audio_file)
+    except Exception as exc:
+        if exc.__class__.__name__ != "ClientNotStarted":
+            raise
+        logger.warning("Voice player stopped during playback; restarting once.")
+        await voice_calls.start()
+        await voice_calls.play(chat_id, audio_file)
+
+
 async def send_music_status(message, text: str) -> None:
     try:
         await client.send_message(
@@ -419,7 +443,7 @@ async def music_command(message, command: str) -> bool:
                 resolve_audio_file(parts[1], chat_id),
                 timeout=90,
             )
-            await voice_calls.play(chat_id, audio_file)
+            await play_audio(chat_id, audio_file)
             await send_music_status(message, "Playing now in the voice chat.")
         elif base_command in PAUSE_COMMANDS:
             await voice_calls.pause(chat_id)
