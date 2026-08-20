@@ -226,6 +226,23 @@ def is_self_message(message) -> bool:
     return bool(message.outgoing or message.from_user and message.from_user.id == me_id)
 
 
+def user_label(user) -> str:
+    if not user:
+        return "unknown"
+
+    name = " ".join(
+        part for part in (user.first_name, user.last_name) if part
+    ).strip()
+    username = f"@{user.username}" if user.username else "no_username"
+
+    return f"{name or 'no_name'} ({username}, id={user.id})"
+
+
+def message_preview(message) -> str:
+    content = message.text or message.caption or "[sticker/media]"
+    return content.replace("\n", " ")[:200]
+
+
 async def is_chat_disabled(chat_id: int) -> bool:
     """
     Compatible with the old Alexa collection:
@@ -352,6 +369,15 @@ async def send_response(message, response: dict) -> None:
     if not response_text:
         return
 
+    logger.info(
+        "Reply sending | to=%s | chat=%s | reply_to=%s | type=%s | text=%s",
+        user_label(message.from_user),
+        message.chat.id,
+        message.id,
+        response_type,
+        str(response_text)[:200],
+    )
+
     try:
         if response_type == "sticker":
             await client.send_sticker(
@@ -365,6 +391,13 @@ async def send_response(message, response: dict) -> None:
                 str(response_text),
                 reply_to_message_id=message.id,
             )
+
+        logger.info(
+            "Reply sent successfully | to=%s | chat=%s | message=%s",
+            user_label(message.from_user),
+            message.chat.id,
+            message.id,
+        )
 
     except FloodWait as exc:
         logger.warning(
@@ -570,6 +603,29 @@ async def alive_handler(client, message):
         logger.exception("Failed to send alive response.")
 
 
+@client.on_message(filters.regex(r"^[/.?\-]ping$"))
+async def ping_handler(client, message):
+    logger.info(
+        "Ping command received | from=%s | chat=%s",
+        user_label(message.from_user),
+        message.chat.id,
+    )
+
+    try:
+        await client.send_message(
+            message.chat.id,
+            "Pong! Bot is online.",
+            reply_to_message_id=message.id,
+        )
+        logger.info(
+            "Ping reply sent | to=%s | chat=%s",
+            user_label(message.from_user),
+            message.chat.id,
+        )
+    except RPCError:
+        logger.exception("Failed to send ping response.")
+
+
 # ============================================================
 # MAIN MESSAGE HANDLER
 # ============================================================
@@ -577,9 +633,12 @@ async def alive_handler(client, message):
 async def message_handler(client, message):
 
     logger.info(
-        "Telegram update received | chat=%s | message=%s",
+        "Telegram update received | from=%s | chat=%s | message=%s | outgoing=%s | text=%s",
+        user_label(message.from_user),
         getattr(message.chat, "id", "unknown"),
         getattr(message, "id", "unknown"),
+        message.outgoing,
+        message_preview(message),
     )
 
     # Ignore service messages, empty messages and our own messages.
@@ -597,6 +656,9 @@ async def message_handler(client, message):
         return
 
     if is_self_message(message):
+        return
+
+    if re.fullmatch(r"^[/.?\-](?:ping|alive)$", message.text or "", re.IGNORECASE):
         return
 
     # Ignore other bots.
