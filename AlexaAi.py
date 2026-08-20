@@ -19,10 +19,14 @@ try:
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
-from pyrogram import Client, filters, idle
+from pyrogram import Client, errors as pyrogram_errors, filters, idle
 from pyrogram.enums import ChatType
 from pyrogram.errors import FloodWait, RPCError
 from pyrogram.handlers import MessageHandler, RawUpdateHandler
+
+if not hasattr(pyrogram_errors, "GroupcallForbidden"):
+    pyrogram_errors.GroupcallForbidden = pyrogram_errors.GroupCallInvalid
+
 from pytgcalls import PyTgCalls
 
 
