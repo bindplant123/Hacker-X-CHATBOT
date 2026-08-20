@@ -565,8 +565,20 @@ async def alive_handler(client, message):
 # MAIN MESSAGE HANDLER
 # ============================================================
 
-@client.on_message(filters.all)
+message_filters = (
+    (filters.private | filters.group)
+    & (filters.text | filters.caption | filters.sticker)
+)
+
+
+@client.on_message(message_filters)
 async def message_handler(client, message):
+
+    logger.info(
+        "Telegram update received | chat=%s | message=%s",
+        getattr(message.chat, "id", "unknown"),
+        getattr(message, "id", "unknown"),
+    )
 
     # Ignore service messages, empty messages and our own messages.
     if not message:
@@ -656,7 +668,10 @@ async def message_handler(client, message):
     elif is_mention:
         should_reply = True
 
-    elif REPLY_TO_NORMAL_MESSAGES:
+    elif REPLY_TO_NORMAL_MESSAGES or message.chat.type in {
+        ChatType.GROUP,
+        ChatType.SUPERGROUP,
+    }:
         should_reply = True
 
     if not should_reply:
