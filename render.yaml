@@ -1,8 +1,10 @@
 services:
   - type: web
-    name: vip-id-chatbot
+    name: hacker-x-chatbot
     runtime: docker
-
+    plan: free
+    autoDeploy: true
+    branch: main
     healthCheckPath: /healthz
 
     envVars:
@@ -35,3 +37,6 @@ services:
 
       - key: APP_NAME
         value: VIP-ID-CHATBOT
+
+      - key: PORT
+        value: "10000"
