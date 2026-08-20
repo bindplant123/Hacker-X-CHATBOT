@@ -330,6 +330,7 @@ def choose_response(trigger: str) -> Optional[dict]:
         return {
             "text": random.choice(DEFAULT_GREETING_RESPONSES),
             "check": "none",
+            "instant": True,
         }
 
     return None
@@ -609,6 +610,13 @@ async def message_handler(client, message):
     if not trigger:
         return
 
+    logger.info(
+        "Message received | chat=%s | message=%s | trigger=%s",
+        message.chat.id,
+        message.id,
+        trigger,
+    )
+
     chat_id = int(message.chat.id)
 
     # Old AlexaDb behaviour.
@@ -655,8 +663,17 @@ async def message_handler(client, message):
     if not response:
         return
 
+    if response.get("instant"):
+        await send_response(message, response)
+        logger.info(
+            "Instant reply sent | chat=%s | message=%s",
+            chat_id,
+            message.id,
+        )
+        return
+
     # --------------------------------------------------------
-    # 60-second delayed reply.
+    # Delayed learned reply.
     # --------------------------------------------------------
 
     schedule_reply(message, response)
