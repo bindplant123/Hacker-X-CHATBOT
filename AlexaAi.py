@@ -584,49 +584,6 @@ async def learn_reply_to_other_user(message) -> None:
 
 
 # ============================================================
-# ALIVE
-# ============================================================
-
-@client.on_message(filters.regex(r"^[/.?\-]alive(?:\s+.*)?$"))
-async def alive_handler(client, message):
-    if message.chat.type == ChatType.PRIVATE:
-        return
-
-    try:
-        await client.send_message(
-            message.chat.id,
-            "**ᴀʟᴇxᴀ ᴀɪ ᴜsᴇʀʙᴏᴛ ғᴏʀ ᴄʜᴀᴛᴛɪɴɢ ɪs ᴡᴏʀᴋɪɴɢ**",
-            reply_to_message_id=message.id,
-        )
-
-    except RPCError:
-        logger.exception("Failed to send alive response.")
-
-
-@client.on_message(filters.regex(r"^[/.?\-]ping$"))
-async def ping_handler(client, message):
-    logger.info(
-        "Ping command received | from=%s | chat=%s",
-        user_label(message.from_user),
-        message.chat.id,
-    )
-
-    try:
-        await client.send_message(
-            message.chat.id,
-            "Pong! Bot is online.",
-            reply_to_message_id=message.id,
-        )
-        logger.info(
-            "Ping reply sent | to=%s | chat=%s",
-            user_label(message.from_user),
-            message.chat.id,
-        )
-    except RPCError:
-        logger.exception("Failed to send ping response.")
-
-
-# ============================================================
 # MAIN MESSAGE HANDLER
 # ============================================================
 
@@ -658,7 +615,40 @@ async def message_handler(client, message):
     if is_self_message(message):
         return
 
-    if re.fullmatch(r"^[/.?\-](?:ping|alive)$", message.text or "", re.IGNORECASE):
+    command = (message.text or "").strip().casefold()
+
+    if command in {".ping", "/ping", "-ping", "?ping"}:
+        logger.info(
+            "Ping command received | from=%s | chat=%s",
+            user_label(message.from_user),
+            message.chat.id,
+        )
+        try:
+            await client.send_message(
+                message.chat.id,
+                "Pong! Bot is online.",
+                reply_to_message_id=message.id,
+            )
+            logger.info(
+                "Ping reply sent | to=%s | chat=%s",
+                user_label(message.from_user),
+                message.chat.id,
+            )
+        except RPCError:
+            logger.exception("Failed to send ping response.")
+        return
+
+    if re.fullmatch(r"^[/.?\-]alive(?:\s+.*)?$", command):
+        if message.chat.type == ChatType.PRIVATE:
+            return
+        try:
+            await client.send_message(
+                message.chat.id,
+                "**ᴀʟᴇxᴀ ᴀɪ ᴜsᴇʀʙᴏᴛ ғᴏʀ ᴄʜᴀᴛᴛɪɴɢ ɪs ᴡᴏʀᴋɪɴɢ**",
+                reply_to_message_id=message.id,
+            )
+        except RPCError:
+            logger.exception("Failed to send alive response.")
         return
 
     # Ignore other bots.
@@ -797,8 +787,9 @@ async def raw_update_logger(client, update, users, chats):
     logger.info("Telegram raw update received: %s", type(update).__name__)
 
 
+client.add_handler(RawUpdateHandler(raw_update_logger), group=-1)
 client.add_handler(MessageHandler(message_handler), group=0)
-client.add_handler(RawUpdateHandler(raw_update_logger), group=1)
+logger.info("Telegram handlers registered: raw=-1 message=0")
 
 
 # ============================================================
