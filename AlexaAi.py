@@ -25,6 +25,7 @@ from pyrogram import Client, errors as pyrogram_errors, filters, idle
 from pyrogram.enums import ChatType
 from pyrogram.errors import FloodWait, RPCError
 from pyrogram.handlers import MessageHandler, RawUpdateHandler
+from pyrogram.session import Session
 from py_yt import VideosSearch
 
 if not hasattr(pyrogram_errors, "GroupcallForbidden"):
@@ -52,6 +53,9 @@ REPLY_DELAY = int(os.getenv("REPLY_DELAY", "0"))
 PORT = int(os.getenv("PORT", "10000"))
 ARC_API_URL = os.getenv("ARC_API_URL", "https://api.arcmusic.fun").rstrip("/")
 ARC_API_KEY = os.getenv("ARC_API_KEY", "").strip()
+PYROGRAM_REQUEST_TIMEOUT = int(os.getenv("PYROGRAM_REQUEST_TIMEOUT", "60"))
+MUSIC_DOWNLOAD_TIMEOUT = int(os.getenv("MUSIC_DOWNLOAD_TIMEOUT", "180"))
+MUSIC_COMMAND_TIMEOUT = int(os.getenv("MUSIC_COMMAND_TIMEOUT", "300"))
 
 # Maximum number of delayed jobs allowed in memory.
 # MongoDB remains the source of truth for learned data.
@@ -130,6 +134,17 @@ def validate_config() -> None:
     if REPLY_DELAY < 0:
         raise RuntimeError("REPLY_DELAY cannot be negative.")
 
+    if PYROGRAM_REQUEST_TIMEOUT < 15:
+        raise RuntimeError("PYROGRAM_REQUEST_TIMEOUT must be at least 15 seconds.")
+
+    if MUSIC_DOWNLOAD_TIMEOUT < 30:
+        raise RuntimeError("MUSIC_DOWNLOAD_TIMEOUT must be at least 30 seconds.")
+
+    if MUSIC_COMMAND_TIMEOUT < MUSIC_DOWNLOAD_TIMEOUT:
+        raise RuntimeError(
+            "MUSIC_COMMAND_TIMEOUT must be at least MUSIC_DOWNLOAD_TIMEOUT."
+        )
+
     if MAX_PENDING_JOBS < 1:
         raise RuntimeError("MAX_PENDING_JOBS must be greater than 0.")
 
@@ -137,6 +152,9 @@ def validate_config() -> None:
 validate_config()
 
 API_ID = int(API_ID_RAW)
+Session.WAIT_TIMEOUT = PYROGRAM_REQUEST_TIMEOUT
+Session.send.__defaults__ = (True, PYROGRAM_REQUEST_TIMEOUT)
+Session.invoke.__defaults__ = (10, PYROGRAM_REQUEST_TIMEOUT, 10)
 
 # ============================================================
 # PYROGRAM
@@ -341,7 +359,7 @@ async def resolve_audio_file(query: str, chat_id: int) -> str:
             try:
                 downloaded_path = await asyncio.wait_for(
                     media_message.download(file_name=candidate_path),
-                    timeout=45,
+                    timeout=MUSIC_DOWNLOAD_TIMEOUT,
                 )
                 if downloaded_path:
                     file_path = downloaded_path
@@ -441,7 +459,7 @@ async def music_command(message, command: str) -> bool:
             await send_music_status(message, "Voice chat started. Searching for the song...")
             audio_file = await asyncio.wait_for(
                 resolve_audio_file(parts[1], chat_id),
-                timeout=90,
+                timeout=MUSIC_COMMAND_TIMEOUT,
             )
             await play_audio(chat_id, audio_file)
             await send_music_status(message, "Playing now in the voice chat.")

@@ -23,6 +23,15 @@ services:
       - key: ARC_API_KEY
         sync: false
 
+      - key: PYROGRAM_REQUEST_TIMEOUT
+        value: "60"
+
+      - key: MUSIC_DOWNLOAD_TIMEOUT
+        value: "180"
+
+      - key: MUSIC_COMMAND_TIMEOUT
+        value: "300"
+
       - key: DATABASE_NAME
         value: AlexaDb
 

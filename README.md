@@ -54,6 +54,9 @@ APP_NAME=VIP-ID-CHATBOT
 PORT=10000
 ARC_API_URL=https://api.arcmusic.fun
 ARC_API_KEY=your_arc_api_key_here
+PYROGRAM_REQUEST_TIMEOUT=60
+MUSIC_DOWNLOAD_TIMEOUT=180
+MUSIC_COMMAND_TIMEOUT=300
 ```
 
 ## Voice-Chat Music
@@ -62,7 +65,9 @@ Add the user account to a Telegram group voice chat, then send `.play song name`
 or `.play YouTube URL`. The player searches YouTube and downloads audio through
 Arc API, so YouTube browser cookies are not required. Create an API key at
 `portal.arcmusic.fun`, add it as `ARC_API_KEY` in Render, and use PyTgCalls and
-FFmpeg for playback. Use `.pause`, `.resume`, `.skip`, or `.stop` to control it.
+FFmpeg for playback. The timeout settings allow slow Telegram media downloads;
+increase them if the Render instance has a slow connection. Use `.pause`,
+`.resume`, `.skip`, or `.stop` to control it.
 
 ## How to Get Telegram Credentials
 
