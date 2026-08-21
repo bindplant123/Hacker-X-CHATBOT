@@ -405,13 +405,9 @@ async def ensure_voice_chat(chat_id: int) -> None:
     if voice_calls is None:
         raise RuntimeError("Music player is not available.")
 
-    try:
-        await voice_calls._app.create_group_call(chat_id)
-        logger.info("Created voice chat for chat_id=%s.", chat_id)
-    except RPCError as exc:
-        if "GROUPCALL_ALREADY_EXISTS" not in str(exc).upper():
-            raise
-        logger.info("Using existing voice chat for chat_id=%s.", chat_id)
+    chat = await voice_calls._app.get_chat(chat_id)
+    if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+        raise RuntimeError("Music playback is available only in group chats.")
 
 
 async def ensure_voice_player() -> None:
@@ -464,7 +460,7 @@ async def music_command(message, command: str) -> bool:
                 return True
 
             await ensure_voice_chat(chat_id)
-            await send_music_status(message, "Voice chat started. Searching for the song...")
+            await send_music_status(message, "Searching for the song...")
             audio_file = await asyncio.wait_for(
                 resolve_audio_file(parts[1], chat_id),
                 timeout=MUSIC_COMMAND_TIMEOUT,
@@ -484,7 +480,13 @@ async def music_command(message, command: str) -> bool:
             return False
     except Exception as exc:
         logger.exception("Music command failed: %s", base_command)
-        await send_music_status(message, f"Music error: {str(exc)[:250]}")
+        error_text = str(exc)
+        if "CREATE_CALL_FAILED" in error_text or "GROUPCALL_NOT_FOUND" in error_text:
+            error_text = (
+                "Start the group voice chat first, then run .play again. "
+                "The same user account will join and play the song."
+            )
+        await send_music_status(message, f"Music error: {error_text[:250]}")
 
     return True
 
