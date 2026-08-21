@@ -83,6 +83,7 @@ DEFAULT_CHAT_RESPONSES = (
 )
 
 MUSIC_COMMANDS = {".play", "/play", "!play", ".p", "/p", "!p"}
+JOIN_COMMANDS = {".join", "/join", "!join"}
 PAUSE_COMMANDS = {".pause", "/pause", "!pause"}
 RESUME_COMMANDS = {".resume", "/resume", "!resume"}
 SKIP_COMMANDS = {".skip", "/skip", "!skip"}
@@ -237,6 +238,9 @@ processed_messages: set[tuple[int, int]] = set()
 voice_calls: Optional[PyTgCalls] = None
 arc_session: Optional[aiohttp.ClientSession] = None
 arc_files: dict[int, str] = {}
+music_queues: dict[int, list[str]] = {}
+music_workers: dict[int, asyncio.Task] = {}
+music_files: set[str] = set()
 
 
 # ============================================================
@@ -394,11 +398,8 @@ async def resolve_audio_file(query: str, chat_id: int) -> str:
                     audio_file.write(chunk)
                 file_path = audio_file.name
 
-    previous_file = arc_files.get(chat_id)
-    if previous_file:
-        with suppress(OSError):
-            os.remove(previous_file)
     arc_files[chat_id] = file_path
+    music_files.add(file_path)
     return file_path
 
 
@@ -436,6 +437,54 @@ async def play_audio(chat_id: int, audio_file: str) -> None:
         await voice_calls.play(chat_id, audio_file)
 
 
+async def get_audio_duration(audio_file: str) -> float:
+    process = await asyncio.create_subprocess_exec(
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        audio_file,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    output, _ = await process.communicate()
+    if process.returncode != 0:
+        return 0
+    try:
+        return max(float(output.strip()), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def music_queue_worker(chat_id: int) -> None:
+    queue = music_queues.setdefault(chat_id, [])
+    try:
+        while queue:
+            audio_file = queue.pop(0)
+            try:
+                await play_audio(chat_id, audio_file)
+                duration = await get_audio_duration(audio_file)
+                await asyncio.sleep(max(duration + 0.5, 1))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Queued music track failed for chat_id=%s", chat_id)
+            finally:
+                music_files.discard(audio_file)
+                with suppress(OSError):
+                    os.remove(audio_file)
+    finally:
+        music_workers.pop(chat_id, None)
+        if not queue:
+            music_queues.pop(chat_id, None)
+
+
+def start_music_queue_worker(chat_id: int) -> None:
+    worker = music_workers.get(chat_id)
+    if worker is None or worker.done():
+        music_workers[chat_id] = asyncio.create_task(music_queue_worker(chat_id))
+
+
 async def send_music_status(message, text: str) -> None:
     try:
         await client.send_message(
@@ -455,7 +504,13 @@ async def music_command(message, command: str) -> bool:
     chat_id = int(message.chat.id)
 
     try:
-        if base_command in MUSIC_COMMANDS:
+        if base_command in JOIN_COMMANDS:
+            await ensure_voice_chat(chat_id)
+            await send_music_status(
+                message,
+                "Voice chat is active. Send .play <song>; this user will join and play.",
+            )
+        elif base_command in MUSIC_COMMANDS:
             if len(parts) == 1:
                 await send_music_status(message, "Use: .play song name or YouTube URL")
                 return True
@@ -466,15 +521,42 @@ async def music_command(message, command: str) -> bool:
                 resolve_audio_file(parts[1], chat_id),
                 timeout=MUSIC_COMMAND_TIMEOUT,
             )
-            await play_audio(chat_id, audio_file)
-            await send_music_status(message, "Playing now in the voice chat.")
+            queue = music_queues.setdefault(chat_id, [])
+            was_playing = chat_id in music_workers and not music_workers[chat_id].done()
+            queue.append(audio_file)
+            start_music_queue_worker(chat_id)
+            if was_playing:
+                await send_music_status(
+                    message,
+                    f"Added to queue. Position: {len(queue)}.",
+                )
+            else:
+                await send_music_status(message, "Playing now in the voice chat.")
         elif base_command in PAUSE_COMMANDS:
             await voice_calls.pause(chat_id)
             await send_music_status(message, "Paused.")
         elif base_command in RESUME_COMMANDS:
             await voice_calls.resume(chat_id)
             await send_music_status(message, "Resumed.")
-        elif base_command in SKIP_COMMANDS | STOP_COMMANDS:
+        elif base_command in SKIP_COMMANDS:
+            await voice_calls.leave_call(chat_id)
+            worker = music_workers.get(chat_id)
+            if worker and not worker.done():
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+            if music_queues.get(chat_id):
+                start_music_queue_worker(chat_id)
+            await send_music_status(message, "Skipped. Playing the next song.")
+        elif base_command in STOP_COMMANDS:
+            queue = music_queues.pop(chat_id, [])
+            worker = music_workers.get(chat_id)
+            if worker and not worker.done():
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+            for queued_file in queue:
+                music_files.discard(queued_file)
+                with suppress(OSError):
+                    os.remove(queued_file)
             await voice_calls.leave_call(chat_id)
             await send_music_status(message, "Stopped and left the voice chat.")
         else:
@@ -865,6 +947,7 @@ async def message_handler(client, message):
 
     if command and command.split(maxsplit=1)[0] in (
         MUSIC_COMMANDS
+        | JOIN_COMMANDS
         | PAUSE_COMMANDS
         | RESUME_COMMANDS
         | SKIP_COMMANDS
@@ -1114,6 +1197,13 @@ async def shutdown(health_runner=None):
 
     pending_jobs.clear()
 
+    for worker in list(music_workers.values()):
+        worker.cancel()
+    if music_workers:
+        await asyncio.gather(*music_workers.values(), return_exceptions=True)
+    music_workers.clear()
+    music_queues.clear()
+
     if voice_calls:
         with suppress(Exception):
             await voice_calls.stop()
@@ -1124,9 +1214,10 @@ async def shutdown(health_runner=None):
             await arc_session.close()
         arc_session = None
 
-    for file_path in arc_files.values():
+    for file_path in music_files | set(arc_files.values()):
         with suppress(OSError):
             os.remove(file_path)
+    music_files.clear()
     arc_files.clear()
 
     if health_runner:
