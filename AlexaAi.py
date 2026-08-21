@@ -405,7 +405,7 @@ async def ensure_voice_chat(chat_id: int) -> None:
     if voice_calls is None:
         raise RuntimeError("Music player is not available.")
 
-    chat = await voice_calls._app.get_chat(chat_id)
+    chat = await client.get_chat(chat_id)
     if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
         raise RuntimeError("Music playback is available only in group chats.")
 
