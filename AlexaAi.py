@@ -293,7 +293,7 @@ async def find_video_id(query: str) -> str:
     if direct_id:
         return direct_id
 
-    search = VideosSearch(query, limit=1, with_live=False, max_retries=3)
+    search = VideosSearch(query, limit=1, with_live=False, max_retries=1)
     result = await search.next()
     videos = result.get("result", []) if result else []
     video_id = videos[0].get("id") if videos else None
@@ -332,8 +332,9 @@ async def resolve_audio_file(query: str, chat_id: int) -> str:
     job_id = data.get("job_id")
 
     if not cdn_url and job_id:
-        for _ in range(20):
-            await asyncio.sleep(3)
+        for attempt in range(20):
+            if attempt:
+                await asyncio.sleep(0.5)
             async with arc_session.get(
                 f"{ARC_API_URL}/youtube/jobStatus", params={"job_id": job_id}
             ) as response:
