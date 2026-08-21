@@ -402,9 +402,16 @@ async def resolve_audio_file(query: str, chat_id: int) -> str:
 
 
 async def ensure_voice_chat(chat_id: int) -> None:
-    chat_call = await voice_calls._app.get_full_chat(chat_id)
-    if chat_call is None:
+    if voice_calls is None:
+        raise RuntimeError("Music player is not available.")
+
+    try:
         await voice_calls._app.create_group_call(chat_id)
+        logger.info("Created voice chat for chat_id=%s.", chat_id)
+    except RPCError as exc:
+        if "GROUPCALL_ALREADY_EXISTS" not in str(exc).upper():
+            raise
+        logger.info("Using existing voice chat for chat_id=%s.", chat_id)
 
 
 async def ensure_voice_player() -> None:
@@ -421,6 +428,7 @@ async def ensure_voice_player() -> None:
 
 async def play_audio(chat_id: int, audio_file: str) -> None:
     await ensure_voice_player()
+    logger.info("Joining voice chat and starting audio for chat_id=%s.", chat_id)
     try:
         await voice_calls.play(chat_id, audio_file)
     except Exception as exc:
