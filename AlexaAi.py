@@ -69,6 +69,8 @@ REPLY_TO_NORMAL_MESSAGES = (
 )
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.session.session").setLevel(logging.WARNING)
 
 DEFAULT_GREETING_RESPONSES = (
     "Hello! Main online hoon.",
@@ -238,9 +240,10 @@ processed_messages: set[tuple[int, int]] = set()
 voice_calls: Optional[PyTgCalls] = None
 arc_session: Optional[aiohttp.ClientSession] = None
 arc_files: dict[int, str] = {}
-music_queues: dict[int, list[str]] = {}
+music_queues: dict[int, list[asyncio.Task]] = {}
 music_workers: dict[int, asyncio.Task] = {}
 music_files: set[str] = set()
+music_resolve_tasks: set[asyncio.Task] = set()
 
 
 # ============================================================
@@ -460,17 +463,16 @@ async def music_queue_worker(chat_id: int) -> None:
     queue = music_queues.setdefault(chat_id, [])
     try:
         while queue:
-            query = queue.pop(0)
+            resolve_task = queue.pop(0)
             audio_file = None
             try:
-                audio_file = await asyncio.wait_for(
-                    resolve_audio_file(query, chat_id),
-                    timeout=MUSIC_COMMAND_TIMEOUT,
-                )
+                audio_file = await resolve_task
                 await play_audio(chat_id, audio_file)
                 duration = await get_audio_duration(audio_file)
                 await asyncio.sleep(max(duration + 0.5, 1))
             except asyncio.CancelledError:
+                if not resolve_task.done():
+                    resolve_task.cancel()
                 raise
             except Exception:
                 logger.exception("Queued music track failed for chat_id=%s", chat_id)
@@ -524,7 +526,15 @@ async def music_command(message, command: str) -> bool:
             await ensure_voice_chat(chat_id)
             queue = music_queues.setdefault(chat_id, [])
             was_playing = chat_id in music_workers and not music_workers[chat_id].done()
-            queue.append(parts[1])
+            resolve_task = asyncio.create_task(
+                asyncio.wait_for(
+                    resolve_audio_file(parts[1], chat_id),
+                    timeout=MUSIC_COMMAND_TIMEOUT,
+                )
+            )
+            music_resolve_tasks.add(resolve_task)
+            resolve_task.add_done_callback(music_resolve_tasks.discard)
+            queue.append(resolve_task)
             start_music_queue_worker(chat_id)
             if was_playing:
                 await send_music_status(
@@ -540,7 +550,6 @@ async def music_command(message, command: str) -> bool:
             await voice_calls.resume(chat_id)
             await send_music_status(message, "Resumed.")
         elif base_command in SKIP_COMMANDS:
-            await voice_calls.leave_call(chat_id)
             worker = music_workers.get(chat_id)
             if worker and not worker.done():
                 worker.cancel()
@@ -549,7 +558,10 @@ async def music_command(message, command: str) -> bool:
                 start_music_queue_worker(chat_id)
             await send_music_status(message, "Skipped. Playing the next song.")
         elif base_command in STOP_COMMANDS:
-            music_queues.pop(chat_id, None)
+            queue = music_queues.pop(chat_id, [])
+            for resolve_task in queue:
+                if not resolve_task.done():
+                    resolve_task.cancel()
             worker = music_workers.get(chat_id)
             if worker and not worker.done():
                 worker.cancel()
@@ -1199,6 +1211,11 @@ async def shutdown(health_runner=None):
     if music_workers:
         await asyncio.gather(*music_workers.values(), return_exceptions=True)
     music_workers.clear()
+    for resolve_task in list(music_resolve_tasks):
+        resolve_task.cancel()
+    if music_resolve_tasks:
+        await asyncio.gather(*music_resolve_tasks, return_exceptions=True)
+    music_resolve_tasks.clear()
     music_queues.clear()
 
     if voice_calls:
