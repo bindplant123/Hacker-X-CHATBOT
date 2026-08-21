@@ -1113,7 +1113,10 @@ async def shutdown(health_runner=None):
 
     pending_jobs.clear()
 
-    voice_calls = None
+    if voice_calls:
+        with suppress(Exception):
+            await voice_calls.stop()
+        voice_calls = None
 
     if arc_session:
         with suppress(Exception):
@@ -1132,7 +1135,8 @@ async def shutdown(health_runner=None):
     with suppress(Exception):
         mongo_client.close()
 
-        with suppress(Exception):
+    with suppress(Exception):
+        if client.is_connected:
             await client.stop()
 
     logger.info("Shutdown complete.")
