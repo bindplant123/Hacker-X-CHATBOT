@@ -460,8 +460,13 @@ async def music_queue_worker(chat_id: int) -> None:
     queue = music_queues.setdefault(chat_id, [])
     try:
         while queue:
-            audio_file = queue.pop(0)
+            query = queue.pop(0)
+            audio_file = None
             try:
+                audio_file = await asyncio.wait_for(
+                    resolve_audio_file(query, chat_id),
+                    timeout=MUSIC_COMMAND_TIMEOUT,
+                )
                 await play_audio(chat_id, audio_file)
                 duration = await get_audio_duration(audio_file)
                 await asyncio.sleep(max(duration + 0.5, 1))
@@ -470,9 +475,10 @@ async def music_queue_worker(chat_id: int) -> None:
             except Exception:
                 logger.exception("Queued music track failed for chat_id=%s", chat_id)
             finally:
-                music_files.discard(audio_file)
-                with suppress(OSError):
-                    os.remove(audio_file)
+                if audio_file:
+                    music_files.discard(audio_file)
+                    with suppress(OSError):
+                        os.remove(audio_file)
     finally:
         music_workers.pop(chat_id, None)
         if not queue:
@@ -516,14 +522,9 @@ async def music_command(message, command: str) -> bool:
                 return True
 
             await ensure_voice_chat(chat_id)
-            await send_music_status(message, "Searching for the song...")
-            audio_file = await asyncio.wait_for(
-                resolve_audio_file(parts[1], chat_id),
-                timeout=MUSIC_COMMAND_TIMEOUT,
-            )
             queue = music_queues.setdefault(chat_id, [])
             was_playing = chat_id in music_workers and not music_workers[chat_id].done()
-            queue.append(audio_file)
+            queue.append(parts[1])
             start_music_queue_worker(chat_id)
             if was_playing:
                 await send_music_status(
@@ -531,7 +532,7 @@ async def music_command(message, command: str) -> bool:
                     f"Added to queue. Position: {len(queue)}.",
                 )
             else:
-                await send_music_status(message, "Playing now in the voice chat.")
+                await send_music_status(message, "Added. Searching and starting playback now.")
         elif base_command in PAUSE_COMMANDS:
             await voice_calls.pause(chat_id)
             await send_music_status(message, "Paused.")
@@ -548,15 +549,11 @@ async def music_command(message, command: str) -> bool:
                 start_music_queue_worker(chat_id)
             await send_music_status(message, "Skipped. Playing the next song.")
         elif base_command in STOP_COMMANDS:
-            queue = music_queues.pop(chat_id, [])
+            music_queues.pop(chat_id, None)
             worker = music_workers.get(chat_id)
             if worker and not worker.done():
                 worker.cancel()
                 await asyncio.gather(worker, return_exceptions=True)
-            for queued_file in queue:
-                music_files.discard(queued_file)
-                with suppress(OSError):
-                    os.remove(queued_file)
             await voice_calls.leave_call(chat_id)
             await send_music_status(message, "Stopped and left the voice chat.")
         else:
