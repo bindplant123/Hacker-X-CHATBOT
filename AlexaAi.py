@@ -393,13 +393,9 @@ async def resolve_audio_file(query: str, chat_id: int) -> str:
                 "Try .play again in a few seconds."
             ) from last_error
     else:
-        async with arc_session.get(cdn_url, timeout=None) as response:
-            if response.status != 200:
-                raise RuntimeError("Could not download audio from Arc CDN.")
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as audio_file:
-                async for chunk in response.content.iter_chunked(1024 * 1024):
-                    audio_file.write(chunk)
-                file_path = audio_file.name
+        # PyTgCalls/FFmpeg can stream a direct CDN URL immediately. Downloading
+        # the complete file here adds the full track duration to startup time.
+        file_path = cdn_url
 
     arc_files[chat_id] = file_path
     music_files.add(file_path)
@@ -477,7 +473,7 @@ async def music_queue_worker(chat_id: int) -> None:
             except Exception:
                 logger.exception("Queued music track failed for chat_id=%s", chat_id)
             finally:
-                if audio_file:
+                if audio_file and os.path.isfile(audio_file):
                     music_files.discard(audio_file)
                     with suppress(OSError):
                         os.remove(audio_file)
