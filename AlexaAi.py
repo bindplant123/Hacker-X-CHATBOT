@@ -558,9 +558,13 @@ async def music_command(message, command: str) -> bool:
             if worker and not worker.done():
                 worker.cancel()
                 await asyncio.gather(worker, return_exceptions=True)
+            with suppress(Exception):
+                await voice_calls.leave_call(chat_id)
             if music_queues.get(chat_id):
                 start_music_queue_worker(chat_id)
-            await send_music_status(message, "Skipped. Playing the next song.")
+                await send_music_status(message, "Skipped. Playing the next song.")
+            else:
+                await send_music_status(message, "Skipped. No next song is queued.")
         elif base_command in STOP_COMMANDS:
             queue = music_queues.pop(chat_id, [])
             worker = music_workers.get(chat_id)
