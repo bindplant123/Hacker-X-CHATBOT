@@ -55,21 +55,23 @@ PORT=10000
 ARC_API_URL=https://api.arcmusic.fun
 ARC_API_KEY=your_arc_api_key_here
 PYROGRAM_REQUEST_TIMEOUT=60
-MUSIC_DOWNLOAD_TIMEOUT=180
-MUSIC_COMMAND_TIMEOUT=300
+MUSIC_DOWNLOAD_TIMEOUT=90
+MUSIC_COMMAND_TIMEOUT=360
 ```
 
 ## Voice-Chat Music
 
-Start a voice chat in the Telegram group first, or use `.join` to check that an
-active call is available, then send `.play song name` or `.play YouTube URL`.
+Start a voice chat in the Telegram group first, then use `.join` to prepare the
+voice player and wait for `.play`, or send `.play song name` directly. Direct
+`.play` automatically starts the player and joins the active call.
 The `SESSION_STRING` user account must be a member of the group; PyTgCalls uses
 that same account to join the active voice chat. The
 player searches YouTube and downloads audio through Arc API, so YouTube browser
 cookies are not required. Create an API key at
 `portal.arcmusic.fun`, add it as `ARC_API_KEY` in Render, and use PyTgCalls and
-FFmpeg for playback. The timeout settings allow slow Telegram media downloads;
-increase them if the Render instance has a slow connection. Use `.pause`,
+FFmpeg for playback. Each Telegram download attempt has a 90-second timeout,
+with up to three attempts; increase it if the Render instance has a slow
+connection. Use `.pause`,
 `.resume`, `.skip`, or `.stop` to control it.
 
 Multiple `.play` requests are queued in order. `.skip` stops the current song

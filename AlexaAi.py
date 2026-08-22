@@ -54,8 +54,8 @@ PORT = int(os.getenv("PORT", "10000"))
 ARC_API_URL = os.getenv("ARC_API_URL", "https://api.arcmusic.fun").rstrip("/")
 ARC_API_KEY = os.getenv("ARC_API_KEY", "").strip()
 PYROGRAM_REQUEST_TIMEOUT = int(os.getenv("PYROGRAM_REQUEST_TIMEOUT", "60"))
-MUSIC_DOWNLOAD_TIMEOUT = int(os.getenv("MUSIC_DOWNLOAD_TIMEOUT", "180"))
-MUSIC_COMMAND_TIMEOUT = int(os.getenv("MUSIC_COMMAND_TIMEOUT", "300"))
+MUSIC_DOWNLOAD_TIMEOUT = int(os.getenv("MUSIC_DOWNLOAD_TIMEOUT", "90"))
+MUSIC_COMMAND_TIMEOUT = int(os.getenv("MUSIC_COMMAND_TIMEOUT", "360"))
 
 # Maximum number of delayed jobs allowed in memory.
 # MongoDB remains the source of truth for learned data.
@@ -240,10 +240,10 @@ processed_messages: set[tuple[int, int]] = set()
 voice_calls: Optional[PyTgCalls] = None
 arc_session: Optional[aiohttp.ClientSession] = None
 arc_files: dict[int, str] = {}
-music_queues: dict[int, list[asyncio.Task]] = {}
+voice_ready_chats: set[int] = set()
+music_queues: dict[int, list[str]] = {}
 music_workers: dict[int, asyncio.Task] = {}
 music_files: set[str] = set()
-music_resolve_tasks: set[asyncio.Task] = set()
 
 
 # ============================================================
@@ -373,6 +373,13 @@ async def resolve_audio_file(query: str, chat_id: int) -> str:
                     file_path = downloaded_path
                     break
                 last_error = RuntimeError("Telegram returned no downloaded file.")
+            except asyncio.TimeoutError as exc:
+                last_error = exc
+                logger.warning(
+                    "Telegram CDN download attempt %s/3 timed out after %ss.",
+                    attempt,
+                    MUSIC_DOWNLOAD_TIMEOUT,
+                )
             except Exception as exc:
                 last_error = exc
                 logger.warning(
@@ -459,17 +466,24 @@ async def music_queue_worker(chat_id: int) -> None:
     queue = music_queues.setdefault(chat_id, [])
     try:
         while queue:
-            resolve_task = queue.pop(0)
+            query = queue.pop(0)
             audio_file = None
             try:
-                audio_file = await resolve_task
+                audio_file = await asyncio.wait_for(
+                    resolve_audio_file(query, chat_id),
+                    timeout=MUSIC_COMMAND_TIMEOUT,
+                )
                 await play_audio(chat_id, audio_file)
                 duration = await get_audio_duration(audio_file)
                 await asyncio.sleep(max(duration + 0.5, 1))
             except asyncio.CancelledError:
-                if not resolve_task.done():
-                    resolve_task.cancel()
                 raise
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Queued music track timed out for chat_id=%s after %ss.",
+                    chat_id,
+                    MUSIC_COMMAND_TIMEOUT,
+                )
             except Exception:
                 logger.exception("Queued music track failed for chat_id=%s", chat_id)
             finally:
@@ -510,9 +524,11 @@ async def music_command(message, command: str) -> bool:
     try:
         if base_command in JOIN_COMMANDS:
             await ensure_voice_chat(chat_id)
+            await ensure_voice_player()
+            voice_ready_chats.add(chat_id)
             await send_music_status(
                 message,
-                "Voice chat is active. Send .play <song>; this user will join and play.",
+                "Voice player is ready. Send .play <song> and I will join and play it.",
             )
         elif base_command in MUSIC_COMMANDS:
             if len(parts) == 1:
@@ -522,15 +538,7 @@ async def music_command(message, command: str) -> bool:
             await ensure_voice_chat(chat_id)
             queue = music_queues.setdefault(chat_id, [])
             was_playing = chat_id in music_workers and not music_workers[chat_id].done()
-            resolve_task = asyncio.create_task(
-                asyncio.wait_for(
-                    resolve_audio_file(parts[1], chat_id),
-                    timeout=MUSIC_COMMAND_TIMEOUT,
-                )
-            )
-            music_resolve_tasks.add(resolve_task)
-            resolve_task.add_done_callback(music_resolve_tasks.discard)
-            queue.append(resolve_task)
+            queue.append(parts[1])
             start_music_queue_worker(chat_id)
             if was_playing:
                 await send_music_status(
@@ -555,14 +563,12 @@ async def music_command(message, command: str) -> bool:
             await send_music_status(message, "Skipped. Playing the next song.")
         elif base_command in STOP_COMMANDS:
             queue = music_queues.pop(chat_id, [])
-            for resolve_task in queue:
-                if not resolve_task.done():
-                    resolve_task.cancel()
             worker = music_workers.get(chat_id)
             if worker and not worker.done():
                 worker.cancel()
                 await asyncio.gather(worker, return_exceptions=True)
             await voice_calls.leave_call(chat_id)
+            voice_ready_chats.discard(chat_id)
             await send_music_status(message, "Stopped and left the voice chat.")
         else:
             return False
@@ -1207,12 +1213,8 @@ async def shutdown(health_runner=None):
     if music_workers:
         await asyncio.gather(*music_workers.values(), return_exceptions=True)
     music_workers.clear()
-    for resolve_task in list(music_resolve_tasks):
-        resolve_task.cancel()
-    if music_resolve_tasks:
-        await asyncio.gather(*music_resolve_tasks, return_exceptions=True)
-    music_resolve_tasks.clear()
     music_queues.clear()
+    voice_ready_chats.clear()
 
     if voice_calls:
         with suppress(Exception):
