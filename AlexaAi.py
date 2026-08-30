@@ -22,7 +22,8 @@ except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
 from pyrogram import Client, errors as pyrogram_errors, filters, idle
-from pyrogram.enums import ChatType
+from pyrogram.enums import ChatMemberStatus, ChatType, ParseMode
+from pyrogram.types import ChatPrivileges
 from pyrogram.errors import FloodWait, RPCError
 from pyrogram.handlers import MessageHandler, RawUpdateHandler
 from pyrogram.session import Session
@@ -244,11 +245,284 @@ voice_ready_chats: set[int] = set()
 music_queues: dict[int, list[str]] = {}
 music_workers: dict[int, asyncio.Task] = {}
 music_files: set[str] = set()
+active_tagalls: set[int] = set()
 
 
 # ============================================================
 # HELPERS
 # ============================================================
+
+async def parse_user(client, message, args_text) -> Optional[int]:
+    if message.reply_to_message:
+        if message.reply_to_message.from_user:
+            return message.reply_to_message.from_user.id
+    
+    if message.entities:
+        for entity in message.entities:
+            if entity.type.name == "TEXT_MENTION" and entity.user:
+                return entity.user.id
+
+    if args_text:
+        parts = args_text.split()
+        if parts:
+            first_arg = parts[0]
+            if first_arg.isdigit():
+                return int(first_arg)
+            if first_arg.startswith("@"):
+                username = first_arg[1:]
+                try:
+                    user = await client.get_users(username)
+                    return user.id
+                except Exception:
+                    pass
+    return None
+
+
+async def handle_admin_commands(client, message) -> bool:
+    global active_tagalls
+    
+    raw_text = (message.text or message.caption or "").strip()
+    if not raw_text:
+        return False
+
+    parts = raw_text.split(maxsplit=1)
+    cmd_word = parts[0]
+    args_text = parts[1] if len(parts) > 1 else ""
+
+    if cmd_word.startswith(("/", ".", "!", "?", "-")):
+        cmd_name = cmd_word[1:].lower()
+    elif cmd_word.startswith("@all"):
+        cmd_name = "tagall"
+    else:
+        return False
+
+    if cmd_name not in {"promote", "lowpromote", "fullpromote", "demote", "tagall", "cancel"}:
+        return False
+
+    chat_id = message.chat.id
+    sender = message.from_user
+    if not sender:
+        return True
+
+    # Ensure it's a group chat
+    if message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+        await message.reply_text("» This command can only be used in groups!")
+        return True
+
+    # ----------------------------------------------------
+    # Tagall and Cancel
+    # ----------------------------------------------------
+    if cmd_name in {"tagall", "cancel"}:
+        try:
+            sender_member = await client.get_chat_member(chat_id, sender.id)
+            if sender_member.status not in {ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR} and sender.id != me_id:
+                await message.reply_text("» Only admins can use this command!")
+                return True
+        except Exception:
+            return True
+
+        if cmd_name == "cancel":
+            if chat_id not in active_tagalls:
+                await message.reply_text("» There is no tagall process ongoing...")
+                return True
+            active_tagalls.discard(chat_id)
+            await message.reply_text("» Stopped Mention.")
+            return True
+
+        # Tagall logic
+        if chat_id in active_tagalls:
+            await message.reply_text("» A tagall is already running in this chat! Use /cancel to stop it.")
+            return True
+
+        if args_text and message.reply_to_message:
+            await message.reply_text("» Give me only one argument (either reply to a message OR provide text)!")
+            return True
+
+        mode = "text_on_cmd"
+        msg_to_send = args_text
+        reply_message = None
+
+        if message.reply_to_message:
+            mode = "text_on_reply"
+            reply_message = message.reply_to_message
+        elif not args_text:
+            msg_to_send = "Hi everyone!"
+
+        active_tagalls.add(chat_id)
+        usrnum = 0
+        usrtxt = ""
+
+        try:
+            async for member in client.get_chat_members(chat_id):
+                if chat_id not in active_tagalls:
+                    break
+                user = member.user
+                if not user or user.is_bot or user.is_deleted:
+                    continue
+
+                usrnum += 1
+                name = user.first_name or "User"
+                name = name.replace("[", "").replace("]", "").replace("(", "").replace(")", "")
+                usrtxt += f"[{name}](tg://user?id={user.id})  "
+
+                if usrnum == 5:
+                    if mode == "text_on_cmd":
+                        txt = f"{msg_to_send}\n{usrtxt}"
+                        await client.send_message(chat_id, txt, disable_web_page_preview=True)
+                    elif mode == "text_on_reply":
+                        await reply_message.reply_text(usrtxt, disable_web_page_preview=True)
+                    await asyncio.sleep(3)
+                    usrnum = 0
+                    usrtxt = ""
+
+            if usrnum > 0 and chat_id in active_tagalls:
+                if mode == "text_on_cmd":
+                    txt = f"{msg_to_send}\n{usrtxt}"
+                    await client.send_message(chat_id, txt, disable_web_page_preview=True)
+                elif mode == "text_on_reply":
+                    await reply_message.reply_text(usrtxt, disable_web_page_preview=True)
+
+        except Exception as e:
+            logger.error(f"Error during tagall: {e}")
+        finally:
+            active_tagalls.discard(chat_id)
+        return True
+
+    # ----------------------------------------------------
+    # Promote / Demote
+    # ----------------------------------------------------
+    # Check promoter permissions (owner or admin with can_promote_members)
+    try:
+        sender_member = await client.get_chat_member(chat_id, sender.id)
+        is_authorized = False
+        if sender_member.status == ChatMemberStatus.OWNER or sender.id == me_id:
+            is_authorized = True
+        elif sender_member.status == ChatMemberStatus.ADMINISTRATOR:
+            if sender_member.privileges and sender_member.privileges.can_promote_members:
+                is_authorized = True
+
+        if not is_authorized:
+            await message.reply_text("» You don't have permission to add new admins!")
+            return True
+    except Exception as e:
+        logger.error(f"Error checking promoter permissions: {e}")
+        return True
+
+    # Check bot permissions
+    try:
+        bot_member = await client.get_chat_member(chat_id, me_id)
+        if bot_member.status != ChatMemberStatus.ADMINISTRATOR or not (bot_member.privileges and bot_member.privileges.can_promote_members):
+            await message.reply_text("» I don't have permission to promote users! Make sure I am an admin and have 'Add New Admins' permission.")
+            return True
+    except Exception as e:
+        logger.error(f"Error checking bot permissions: {e}")
+        return True
+
+    target_user_id = await parse_user(client, message, args_text)
+    if not target_user_id:
+        await message.reply_text("» I don't know who that user is. Reply to their message or provide their username/ID.")
+        return True
+
+    if target_user_id == me_id:
+        await message.reply_text("» I cannot promote/demote myself!")
+        return True
+
+    try:
+        target_user = await client.get_users(target_user_id)
+    except Exception:
+        await message.reply_text("» Could not find this user. Make sure they are in the group.")
+        return True
+
+    if cmd_name == "demote":
+        try:
+            target_member = await client.get_chat_member(chat_id, target_user_id)
+            if target_member.status == ChatMemberStatus.OWNER:
+                await message.reply_text("» That user is the owner of the chat and I cannot demote them.")
+                return True
+            if target_member.status != ChatMemberStatus.ADMINISTRATOR:
+                await message.reply_text("» According to me, that user is not an admin here!")
+                return True
+        except Exception:
+            pass
+
+        privileges = ChatPrivileges(
+            can_change_info=False,
+            can_post_messages=False,
+            can_edit_messages=False,
+            can_delete_messages=False,
+            can_invite_users=False,
+            can_restrict_members=False,
+            can_pin_messages=False,
+            can_promote_members=False,
+            can_manage_video_chats=False,
+            is_anonymous=False,
+        )
+
+        try:
+            await client.promote_chat_member(chat_id, target_user_id, privileges)
+            promoter_mention = f"<a href='tg://user?id={sender.id}'>{sender.first_name}</a>"
+            target_mention = f"<a href='tg://user?id={target_user.id}'>{target_user.first_name}</a>"
+            await message.reply_text(
+                f"<b>» Successfully demoted an admin in {message.chat.title}</b>\n\n"
+                f"<b>Demoted :</b> {target_mention}\n"
+                f"<b>Demoter :</b> {promoter_mention}",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            await message.reply_text(f"» Failed to demote: {str(e)}")
+        return True
+
+    # promote, lowpromote, fullpromote
+    try:
+        target_member = await client.get_chat_member(chat_id, target_user_id)
+        if target_member.status in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER}:
+            await message.reply_text("» According to me, that user is already an admin here!")
+            return True
+    except Exception:
+        pass
+
+    bp = bot_member.privileges
+    if cmd_name == "lowpromote":
+        privileges = ChatPrivileges(
+            can_delete_messages=bp.can_delete_messages if bp else True,
+            can_invite_users=bp.can_invite_users if bp else True,
+            can_pin_messages=bp.can_pin_messages if bp else True,
+        )
+        title = "Low Admin"
+    elif cmd_name == "promote":
+        privileges = ChatPrivileges(
+            can_change_info=bp.can_change_info if bp else True,
+            can_delete_messages=bp.can_delete_messages if bp else True,
+            can_invite_users=bp.can_invite_users if bp else True,
+            can_pin_messages=bp.can_pin_messages if bp else True,
+        )
+        title = "Admin"
+    elif cmd_name == "fullpromote":
+        privileges = ChatPrivileges(
+            can_change_info=bp.can_change_info if bp else True,
+            can_delete_messages=bp.can_delete_messages if bp else True,
+            can_invite_users=bp.can_invite_users if bp else True,
+            can_pin_messages=bp.can_pin_messages if bp else True,
+            can_restrict_members=bp.can_restrict_members if bp else True,
+            can_promote_members=bp.can_promote_members if bp else True,
+            can_manage_video_chats=bp.can_manage_video_chats if bp else True,
+        )
+        title = "Full Admin"
+
+    try:
+        await client.promote_chat_member(chat_id, target_user_id, privileges)
+        promoter_mention = f"<a href='tg://user?id={sender.id}'>{sender.first_name}</a>"
+        target_mention = f"<a href='tg://user?id={target_user.id}'>{target_user.first_name}</a>"
+        await message.reply_text(
+            f"<b>» Promoted a user to {title} in {message.chat.title}</b>\n\n"
+            f"<b>Promoted :</b> {target_mention}\n"
+            f"<b>Promoter :</b> {promoter_mention}",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        await message.reply_text(f"» Failed to promote: {str(e)}")
+    return True
+
 
 def normalize_text(value: Optional[str]) -> str:
     if not value:
@@ -948,6 +1222,9 @@ async def message_handler(client, message):
     if not message:
         return
 
+    if await handle_admin_commands(client, message):
+        return
+
     if message.chat.type not in {
         ChatType.PRIVATE,
         ChatType.GROUP,
@@ -1241,11 +1518,11 @@ async def shutdown(health_runner=None):
             await health_runner.cleanup()
 
     with suppress(Exception):
-        mongo_client.close()
-
-    with suppress(Exception):
         if client.is_connected:
             await client.stop()
+
+    with suppress(Exception):
+        mongo_client.close()
 
     logger.info("Shutdown complete.")
 
