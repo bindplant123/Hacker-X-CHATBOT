@@ -50,3 +50,6 @@ dist/
 
 # Security tools
 .bandit/
+
+# Local reference / scratch directory
+scratch/
